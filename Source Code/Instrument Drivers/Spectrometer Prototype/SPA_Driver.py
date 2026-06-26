@@ -16,6 +16,10 @@ try:
 except ImportError:
     HAS_SERIAL = False
 
+def log(msg):
+    with open("C:/temp/spa_log.txt","a") as f:
+         f.write(f"{time.strftime('%H:%M;%S')} {msg}\n")
+         f.flush()
 
 # =======================================================================
 #  Constants
@@ -184,7 +188,7 @@ def save_calibration_json(cal: dict, filepath: str) -> None:
     os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
     with open(filepath, "w") as f:
         json.dump(cal, f, indent=2)
-    print(f"[cal] Saved calibration to {filepath}")
+    log(f"[cal] Saved calibration to {filepath}")
 
 
 def download_calibration(ser: serial.Serial) -> dict | None:
@@ -208,7 +212,7 @@ def download_calibration(ser: serial.Serial) -> dict | None:
     MAX_RETRIES = 3
 
     for attempt in range(MAX_RETRIES):
-        print(f"[cal] Downloading calibration from instrument (attempt {attempt+1})...")
+        log(f"[cal] Downloading calibration from instrument (attempt {attempt+1})...")
 
         passes = []
         for pass_num in range(2):
@@ -218,18 +222,18 @@ def download_calibration(ser: serial.Serial) -> dict | None:
             passes.append(words)
 
         if len(passes) < 2:
-            print("[cal] Download failed -- no data received.")
+            log("[cal] Download failed -- no data received.")
             continue
 
         # Compare the two passes
         if passes[0] == passes[1]:
-            print("[cal] Verification OK -- two passes match.")
+            log("[cal] Verification OK -- two passes match.")
             return _parse_cal_words(passes[0])
         else:
             mismatches = sum(1 for a, b in zip(passes[0], passes[1]) if a != b)
-            print(f"[cal] Verification FAILED -- {mismatches} word(s) differ. Retrying...")
+            log(f"[cal] Verification FAILED -- {mismatches} word(s) differ. Retrying...")
 
-    print("[cal] Calibration download failed after all retries.")
+    log("[cal] Calibration download failed after all retries.")
     return None
 
 
@@ -384,6 +388,7 @@ def SPA_Get_Reading(port: str, cal_file: str, parameters: tuple)->tuple:
     channel,range_index,bias,sample_rate,samples=parameters
     polarity = "Negative" if bias < 0 else "Positive"
     enable=(bias != 0)
+    key=f"ch{channel}_amps"
     spa = SPA(port,cal_file)
     spa.connect()
     spa.set_range(channel,range_index)
@@ -392,7 +397,7 @@ def SPA_Get_Reading(port: str, cal_file: str, parameters: tuple)->tuple:
     total=0
     for _ in range(samples):
         reading=spa.read_sample()
-        total += reading
+        total=total+reading[key]
     reading=total/samples
     spa.disconnect()
     return (reading,polarity,enable)
@@ -431,7 +436,7 @@ class SPA:
 
     def connect(self) -> None:
         """Open serial port, load calibration, enable instrument transmit."""
-        print(f"[spa] Opening {self.port} at {BAUD_RATE} baud...")
+        log(f"[spa] Opening {self.port} at {BAUD_RATE} baud...")
         self.ser = serial.Serial(
             port=self.port,
             baudrate=BAUD_RATE,
@@ -449,17 +454,17 @@ class SPA:
             if self.cal:
                 device_id = self.cal.get("DeviceID", "unknown")
                 serial_id = self.cal.get("SerialID", "unknown")
-                print(f"[cal] Loaded calibration from {self.cal_file} "
+                log(f"[cal] Loaded calibration from {self.cal_file} "
                       f"(device={device_id}, serial={serial_id})")
 
         if self.cal is None:
-            print("[cal] No calibration file found -- downloading from instrument...")
+            log("[cal] No calibration file found -- downloading from instrument...")
             self.cal = download_calibration(self.ser)
             if self.cal and self.cal_file:
                 save_calibration_json(self.cal, self.cal_file)
 
         if self.cal is None:
-            print("[cal] WARNING: No calibration available. "
+            log("[cal] WARNING: No calibration available. "
                   "Current readings will be raw ADC counts, not calibrated Amps.")
 
         # Send initial configuration with transmit enable
@@ -470,7 +475,7 @@ class SPA:
         # Flush any stale data
         self.ser.reset_input_buffer()
 
-        print("[spa] Connected and streaming.")
+        log("[spa] Connected and streaming.")
 
     def disconnect(self) -> None:
         """Disable instrument transmit and close the serial port.
@@ -485,7 +490,7 @@ class SPA:
             self._send_config()
             time.sleep(0.05)
             self.ser.close()
-            print("[spa] Disconnected.")
+            log("[spa] Disconnected.")
 
     # -- Configuration ------------------------------------------
 
@@ -500,7 +505,7 @@ class SPA:
             raise ValueError(f"range_index must be 0..7, got {range_index}")
         self._range[channel] = range_index
         label = RANGE_TABLE[range_index][2]
-        print(f"[spa] Ch{channel} range set to {label} (index {range_index})")
+        log(f"[spa] Ch{channel} range set to {label} (index {range_index})")
         self._build_registers()
         self._send_config()
 
@@ -509,7 +514,7 @@ class SPA:
         if hz not in SAMPLE_RATES:
             raise ValueError(f"Sample rate must be 2, 10, or 100 Hz, got {hz}")
         self._sample_rate_hz = hz
-        print(f"[spa] Sample rate set to {hz} Hz")
+        log(f"[spa] Sample rate set to {hz} Hz")
         self._build_registers()
         self._send_config()
 
@@ -522,7 +527,7 @@ class SPA:
         self._avg_size = n
         self._avg_buf_ch1 = deque(maxlen=n)
         self._avg_buf_ch2 = deque(maxlen=n)
-        print(f"[spa] Rolling average set to {n}x")
+        log(f"[spa] Rolling average set to {n}x")
 
     def set_bias(self, channel: int, voltage: float,
                  polarity: str = "Positive", enable: bool = False) -> None:
@@ -540,7 +545,7 @@ class SPA:
         self._bias_enabled[channel] = enable
         state = "ON" if enable else "OFF"
         sign = "+" if polarity == "Positive" else "-"
-        print(f"[spa] Ch{channel} bias: {sign}{voltage:.1f} V, source {state}")
+        log(f"[spa] Ch{channel} bias: {sign}{voltage:.1f} V, source {state}")
         self._build_registers()
         self._send_config()
 
